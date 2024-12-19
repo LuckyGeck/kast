@@ -94,4 +94,5 @@ const (
 	ConnectionNamespace = "urn:x-cast:com.google.cast.tp.connection"
 	ReceiverNamespace   = "urn:x-cast:com.google.cast.receiver"
 	MediaNamespace      = "urn:x-cast:com.google.cast.media"
+	YouTubeNamespace    = "urn:x-cast:com.google.youtube.mdx"
 )

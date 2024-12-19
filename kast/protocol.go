@@ -6,7 +6,7 @@ const DefaultReceiverID = "receiver-0"
 const (
 	DefaultMediaReceiverAppID     = "CC1AD845"
 	DefaultMediaReceiverBetaAppID = "233637DE"
-	YouTubeAppID                  = "233637DE"
+	YouTubeAppID                  = "2C6A6E3D"
 	NetflixAppID                  = "CA5E8412"
 )
 

@@ -33,6 +33,8 @@ func main() {
 		log.Fatal("Please provide a video URL using -video flag")
 	}
 
+	appID := kast.DefaultMediaReceiverAppID
+
 	device, err := kast.FindDevice(ctx, *deviceName)
 	if err != nil {
 		log.Fatalf("Error finding device %q: %v", *deviceName, err)
@@ -49,7 +51,7 @@ func main() {
 
 	go c.Run()
 
-	launch, err := kast.Call[kast.ReceiverStatusMsg](c, kast.Launch.With("appId", kast.DefaultMediaReceiverAppID))
+	launch, err := kast.Call[kast.ReceiverStatusMsg](c, kast.Launch.With("appId", appID))
 	if err != nil {
 		log.Fatalf("LAUNCH: %v", err)
 	}
@@ -62,20 +64,18 @@ func main() {
 	if launch.Type != kast.MsgTypeReceiverStatus {
 		log.Fatalf("Expected RECEIVER_STATUS, got %s", launch.Type)
 	}
-	idx := slices.IndexFunc(launch.Status.Applications, func(app kast.Application) bool {
-		return app.AppID == kast.DefaultMediaReceiverAppID
-	})
+	idx := slices.IndexFunc(launch.Status.Applications, func(app kast.Application) bool { return app.AppID == appID })
 	if idx == -1 {
 		log.Fatalf("Expected Default Media Receiver, got %s", launch.Status.Applications[0].AppID)
 	}
-	app := launch.Status.Applications[idx]
+	a := launch.Status.Applications[idx]
 
-	if err := c.Connect(app.TransportID); err != nil {
-		log.Fatalf("CONNECT(%s): %v", app.TransportID, err)
+	if err := c.Connect(a.TransportID); err != nil {
+		log.Fatalf("CONNECT(%s): %v", a.TransportID, err)
 	}
 
 	load, err := kast.Call[kast.MediaStatusMsg](c, kast.Msg{
-		DestinationID: app.TransportID,
+		DestinationID: a.TransportID,
 		Namespace:     kast.MediaNamespace,
 		Type:          kast.MsgTypeLoad,
 		Payload: []kast.KeyVal{
