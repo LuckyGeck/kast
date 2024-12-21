@@ -8,15 +8,19 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
 	"slices"
+	"syscall"
 
 	"github.com/luckygeck/kast/kast"
+	"github.com/luckygeck/kast/video"
 )
 
 var (
-	videoURL   = flag.String("video", "", "URL of the video to cast")
 	deviceName = flag.String("device", "", "Name of the Chromecast device")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
+	port       = flag.Int("port", 19091, "Port to start the video server on (0 for random)")
+	cast       = flag.Bool("cast", false, "Cast to the Chromecast device")
 )
 
 func main() {
@@ -26,11 +30,32 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle OS signals for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		log.Fatal("Shutting down...")
+	}()
+
 	flag.Parse()
 
-	if *videoURL == "" {
-		log.Fatal("Please provide a video URL using -video flag")
+	if *deviceName == "" {
+		log.Fatal("device name is required")
+	}
+
+	// Start the video server
+	videoURL, err := video.StartServer(*port)
+	if err != nil {
+		log.Fatalf("Failed to start video server: %v", err)
+	}
+	slog.Info("Started video server", "video", videoURL)
+
+	if !*cast {
+		select {}
 	}
 
 	appID := kast.DefaultMediaReceiverAppID
@@ -55,11 +80,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("LAUNCH: %v", err)
 	}
-	blob, err := json.MarshalIndent(launch, "", "  ")
-	if err != nil {
-		log.Fatalf("Failed to marshal launch: %v", err)
+	if *debug {
+		blob, _ := json.MarshalIndent(launch, "", "  ")
+		fmt.Printf("LAUNCH: %s\n", string(blob))
 	}
-	fmt.Printf("LAUNCH: %s\n", string(blob))
 
 	if launch.Type != kast.MsgTypeReceiverStatus {
 		log.Fatalf("Expected RECEIVER_STATUS, got %s", launch.Type)
@@ -80,23 +104,25 @@ func main() {
 		Type:          kast.MsgTypeLoad,
 		Payload: []kast.KeyVal{
 			{Key: "media", Value: kast.MediaInformation{
-				ContentID:   *videoURL,
+				// ContentID:   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
+				ContentID:   videoURL,
 				StreamType:  "BUFFERED",
 				ContentType: "video/mp4",
 				Metadata: &kast.Metadata{
-					MetadataType: 0, // GenericMediaMetadata
-					Title:        "Test Video",
-					Subtitle:     "Test Subtitle",
+					MetadataType: 0,
+					Title:        "Live Bouncing Ball",
+					Subtitle:     "Ball bouncing on a white background",
 				},
 			}},
 		},
 	})
 	if err != nil {
-		log.Fatalf("LOAD(%s): %v", *videoURL, err)
+		log.Fatalf("LOAD(%s): %v", videoURL, err)
 	}
-	blob, err = json.MarshalIndent(load, "", "  ")
-	if err != nil {
-		log.Fatalf("Failed to marshal load: %v", err)
+	if *debug {
+		blob, _ := json.MarshalIndent(load, "", "  ")
+		fmt.Printf("LOAD: %T: %s\n", load, string(blob))
 	}
-	fmt.Printf("LOAD: %T: %s\n", load, string(blob))
+
+	<-ctx.Done()
 }

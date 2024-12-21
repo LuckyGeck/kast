@@ -120,6 +120,9 @@ type MediaInformation struct {
 	Duration float64 `json:"duration,omitempty"`
 	// (optional) Metadata about the media content.
 	Metadata *Metadata `json:"metadata,omitempty"`
+
+	// Custom data for the media content.
+	CustomData map[string]any `json:"customData,omitempty"`
 }
 
 type Metadata struct {

@@ -2,8 +2,11 @@ module github.com/luckygeck/kast/kast
 
 go 1.23.4
 
+replace github.com/luckygeck/kast/proto => ../proto
+
 require (
 	github.com/grandcat/zeroconf v1.0.0
+	github.com/luckygeck/kast/proto v0.0.0-20241219172613-8ea4ed62e7ae
 	google.golang.org/protobuf v1.36.0
 )
 
