@@ -35,7 +35,7 @@ func StartServer(port int) (string, error) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 
 		// Generate full video (30 seconds)
-		videoData, err := generateVideoSegment(640, 360, 1) // Use a reasonable resolution
+		videoData, err := generateVideoSegment(1280, 720, 1) // Use a reasonable resolution
 		if err != nil {
 			slog.Error("Failed to generate video", "error", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
