@@ -2,12 +2,13 @@ package video
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"image"
 	"image/color"
+	"io"
 	"math"
 	"math/cmplx"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -17,98 +18,18 @@ import (
 )
 
 const (
-	segmentDurationSec = 30
-	frameRate          = 30
-	segmentDuration    = segmentDurationSec * time.Second
-	framesPerSegment   = frameRate * segmentDurationSec
-	totalDuration      = 30 * time.Second
-	totalSegments      = int(totalDuration / segmentDuration)
-	maxIterations      = 100
+	frameRate     = 30
+	maxIterations = 100
 )
 
-func writeFramesToPipe(writer *os.File, width, height, segmentID int) error {
-	start := time.Now()
-	startFrame := (segmentID - 1) * framesPerSegment
-	numWorkers := runtime.NumCPU()
-
-	type work struct {
-		img  *image.RGBA
-		done chan struct{}
-	}
-	works := make([]*work, framesPerSegment)
-	for i := range works {
-		works[i] = &work{
-			done: make(chan struct{}),
-		}
-	}
-
-	var wg sync.WaitGroup
-	// Start workers
-	var jobIdx atomic.Int32
-	for w := 0; w < numWorkers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for frameIndex := jobIdx.Add(1); frameIndex <= framesPerSegment; frameIndex = jobIdx.Add(1) {
-				w := works[frameIndex-1]
-				w.img = generateFrame(width, height, startFrame-1+int(frameIndex))
-				close(w.done)
-			}
-		}()
-	}
-	out := bufio.NewWriter(writer)
-	// Write frames to pipe in order
-	for i, w := range works {
-		<-w.done
-		// RGB24 format expects 3 bytes per pixel in RGB order
-		size := w.img.Bounds().Size()
-		for y := 0; y < size.Y; y++ {
-			for x := 0; x < size.X; x++ {
-				r, g, b, _ := w.img.At(x, y).RGBA()
-				out.WriteByte(uint8(r >> 8))
-				out.WriteByte(uint8(g >> 8))
-				out.WriteByte(uint8(b >> 8))
-			}
-		}
-
-		works[i] = nil // free up memory
-
-		// Show progress
-		progress := (i + 1) * 100 / framesPerSegment
-		if i%frameRate == 0 {
-			out.Flush()
-			fmt.Printf("Segment %d: %d%% complete - elapsed: %s\n", segmentID, progress, time.Since(start))
-		}
-	}
-	out.Flush()
-	fmt.Printf("Segment %d: 100%% complete - elapsed: %s\n", segmentID, time.Since(start))
-
-	wg.Wait()
-	return nil
-}
-
-func generateVideoSegment(width, height, segmentID int) ([]byte, error) {
-	if segmentID < 1 || segmentID > totalSegments {
-		return nil, fmt.Errorf("invalid segment ID: %d, must be between 1 and %d", segmentID, totalSegments)
-	}
-
-	// Check if ffmpeg is available
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, fmt.Errorf("ffmpeg not found: %v", err)
-	}
-
-	// Create a pipe for streaming to ffmpeg
+func streamMPEGTS(w http.ResponseWriter, width, height int) error {
 	ffmpegReader, ffmpegWriter, err := os.Pipe()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer ffmpegWriter.Close()
 	defer ffmpegReader.Close()
 
-	// Create a buffer for the output
-	var outputBuffer bytes.Buffer
-
-	// Start ffmpeg command
 	ffmpegCmd := exec.Command("ffmpeg",
 		"-y",
 		"-f", "rawvideo",
@@ -118,44 +39,89 @@ func generateVideoSegment(width, height, segmentID int) ([]byte, error) {
 		"-framerate", fmt.Sprintf("%d", frameRate),
 		"-i", "pipe:0",
 		"-c:v", "h264",
-		"-preset", "slow",
+		"-preset", "veryfast",
+		"-tune", "zerolatency",
 		"-pix_fmt", "yuv420p",
-		"-an",
-		"-movflags", "frag_keyframe+empty_moov",
-		"-f", "mp4",
-		"-crf", "17",
-		"-profile:v", "high",
-		"-level", "4.1",
-		"-maxrate", "8M",
-		"-bufsize", "16M",
-		"-x264-params", "aq-mode=3:deblock=-1,-1",
+		"-f", "mpegts",
+		"-flush_packets", "1",
 		"pipe:1",
 	)
-	ffmpegCmd.Stdin = ffmpegReader
-	ffmpegCmd.Stdout = &outputBuffer
+	ffmpegCmd.Stdout = bufio.NewWriter(w)
 	ffmpegCmd.Stderr = os.Stderr
+	ffmpegCmd.Stdin = ffmpegReader
 
-	// Start the command before writing frames
-	if err := ffmpegCmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start ffmpeg: %v", err)
-	}
-
-	// Write frames in a goroutine
-	var writeErr error
+	// Write frames continuously
 	go func() {
-		defer ffmpegWriter.Close()
-		writeErr = writeFramesToPipe(ffmpegWriter, width, height, segmentID)
+		out := bufio.NewWriter(ffmpegWriter)
+		writeFramesToPipe(out, width, height)
+		out.Flush()
+		ffmpegWriter.Close()
 	}()
 
-	// Wait for ffmpeg to finish
-	if err := ffmpegCmd.Wait(); err != nil {
-		if writeErr != nil {
-			return nil, fmt.Errorf("failed to write frames: %v", writeErr)
-		}
-		return nil, fmt.Errorf("failed to finish ffmpeg: %v", err)
+	if err := ffmpegCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start ffmpeg: %v", err)
 	}
 
-	return outputBuffer.Bytes(), nil
+	ffmpegCmd.Wait()
+	return nil
+}
+
+func writeFramesToPipe(out io.ByteWriter, width, height int) error {
+	numWorkers := runtime.NumCPU()
+	frameCount := int32(frameRate) // Generate 1 seconds worth of frames
+
+	type work struct {
+		img  *image.RGBA
+		done chan struct{}
+	}
+	works := make([]*work, frameCount)
+	for i := range works {
+		works[i] = &work{
+			done: make(chan struct{}),
+		}
+	}
+
+	var wg sync.WaitGroup
+	var jobIdx atomic.Int32
+
+	// Use current time for animation
+	startTime := time.Now()
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for frameIndex := jobIdx.Add(1); frameIndex <= frameCount; frameIndex = jobIdx.Add(1) {
+				w := works[frameIndex-1]
+				// Use elapsed time instead of frame number for animation
+				elapsedSeconds := time.Since(startTime).Seconds()
+				w.img = generateFrame(width, height, int(elapsedSeconds*float64(frameRate)))
+				close(w.done)
+			}
+		}()
+	}
+
+	for _, w := range works {
+		<-w.done
+		// Write frame data
+		size := w.img.Bounds().Size()
+		for y := 0; y < size.Y; y++ {
+			for x := 0; x < size.X; x++ {
+				r, g, b, _ := w.img.At(x, y).RGBA()
+				if err := out.WriteByte(uint8(r >> 8)); err != nil {
+					return err
+				}
+				if err := out.WriteByte(uint8(g >> 8)); err != nil {
+					return err
+				}
+				if err := out.WriteByte(uint8(b >> 8)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	wg.Wait()
+	return nil
 }
 
 // Generate a frame of the Mandelbrot set.

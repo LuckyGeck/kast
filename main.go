@@ -17,6 +17,7 @@ import (
 )
 
 var (
+	videoURL   = flag.String("video", "", "URL of the video to play")
 	deviceName = flag.String("device", "", "Name of the Chromecast device")
 	debug      = flag.Bool("debug", false, "Enable debug logging")
 	port       = flag.Int("port", 19091, "Port to start the video server on (0 for random)")
@@ -48,11 +49,11 @@ func main() {
 	}
 
 	// Start the video server
-	videoURL, err := video.StartServer(*port)
+	servedVideoURL, err := video.StartServer(*port)
 	if err != nil {
 		log.Fatalf("Failed to start video server: %v", err)
 	}
-	slog.Info("Started video server", "video", videoURL)
+	slog.Info("Started video server", "video", servedVideoURL)
 
 	if !*cast {
 		select {}
@@ -98,26 +99,30 @@ func main() {
 		log.Fatalf("CONNECT(%s): %v", a.TransportID, err)
 	}
 
+	contentID := servedVideoURL
+	if *videoURL != "" {
+		contentID = *videoURL
+	}
+
 	load, err := kast.Call[kast.MediaStatusMsg](c, kast.Msg{
 		DestinationID: a.TransportID,
 		Namespace:     kast.MediaNamespace,
 		Type:          kast.MsgTypeLoad,
 		Payload: []kast.KeyVal{
 			{Key: "media", Value: kast.MediaInformation{
-				// ContentID:   "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
-				ContentID:   videoURL,
-				StreamType:  "BUFFERED",
-				ContentType: "video/mp4",
+				ContentID:   contentID,
+				StreamType:  "LIVE",
+				ContentType: "application/vnd.apple.mpegurl",
 				Metadata: &kast.Metadata{
 					MetadataType: 0,
-					Title:        "Live Bouncing Ball",
-					Subtitle:     "Ball bouncing on a white background",
+					Title:        "Live Mandelbrot Animation",
+					Subtitle:     "Mandelbrot set animation",
 				},
 			}},
 		},
 	})
 	if err != nil {
-		log.Fatalf("LOAD(%s): %v", videoURL, err)
+		log.Fatalf("LOAD(%s): %v", servedVideoURL, err)
 	}
 	if *debug {
 		blob, _ := json.MarshalIndent(load, "", "  ")

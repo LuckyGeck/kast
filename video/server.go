@@ -7,7 +7,7 @@ import (
 	"net/http"
 )
 
-func StartServer(port int) (string, error) {
+func StartServer(port int) (videoURL string, err error) {
 	// Listen on all interfaces instead of just localhost
 	addr := fmt.Sprintf(":%d", port)
 	listener, err := net.Listen("tcp", addr)
@@ -22,29 +22,22 @@ func StartServer(port int) (string, error) {
 	}
 
 	actualPort := listener.Addr().(*net.TCPAddr).Port
-	videoURL := fmt.Sprintf("http://%s:%d/video.mp4", ip.String(), actualPort)
+	videoURL = fmt.Sprintf("http://%s:%d/playlist.m3u8", ip.String(), actualPort)
 
 	// Start HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "video/static/index.html")
 	})
-	mux.HandleFunc("/video.mp4", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("serving video", r.URL.Path)
-		w.Header().Set("Content-Type", "video/mp4")
+	mux.HandleFunc("/video.ts", func(w http.ResponseWriter, r *http.Request) {
+		slog.Info("Serving video stream", "path", r.URL.Path)
+		w.Header().Set("Content-Type", "video/mp2t")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Transfer-Encoding", "chunked")
 
-		// Generate full video (30 seconds)
-		videoData, err := generateVideoSegment(1280, 720, 1) // Use a reasonable resolution
-		if err != nil {
-			slog.Error("Failed to generate video", "error", err)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(videoData)))
-		if _, err := w.Write(videoData); err != nil {
-			slog.Error("Failed to write video", "error", err)
+		if err := streamMPEGTS(w, 1280, 720); err != nil {
+			http.Error(w, "Streaming failed", http.StatusInternalServerError)
+			slog.Error("Streaming failed", "error", err)
 			return
 		}
 	})
