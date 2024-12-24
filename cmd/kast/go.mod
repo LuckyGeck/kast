@@ -1,11 +1,11 @@
-module github.com/luckygeck/kast
+module github.com/luckygeck/kast/cmd/kast
 
 go 1.23.4
 
 replace (
-	github.com/luckygeck/kast/kast => ./kast
-	github.com/luckygeck/kast/proto => ./proto
-	github.com/luckygeck/kast/video => ./video
+	github.com/luckygeck/kast/kast => ../../kast
+	github.com/luckygeck/kast/proto => ../../proto
+	github.com/luckygeck/kast/video => ../../video
 )
 
 require (
